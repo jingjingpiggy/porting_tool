@@ -1,0 +1,187 @@
+#!/bin/bash
+
+# Remember to modify two variables below if needed when you use this script for
+# porting iotg TC.
+DIR_CATS_DEV="$HOME/workspace/vied-viedandr-cats-dev"
+DIR_CAMERA_TESTING="$HOME/workspace/vied-viedandr-camera-testing"
+
+YOCTO_CATS_TESTCASE_HOME="$DIR_CATS_DEV/DUT/Yocto/TestCase/"
+ANDROID_CATS_TESTCASE_HOME="$DIR_CATS_DEV/DUT/TestCase/"
+GENERATOR_SCRIPT_HOME="$DIR_CAMERA_TESTING/v4l2-tests/data/ipu4_v4l2_test/TestCases/"
+EXE_NAME="ipu4_v4l2_test"
+TOOL_PATH=`pwd`
+dev_prefix=("IMX214" "IMX132" "CSI")
+
+if [ "$1" == "yocto" ]; then
+    CATS_TEST_HOME=${YOCTO_CATS_TESTCASE_HOME}
+else
+    CATS_TEST_HOME=${ANDROID_CATS_TESTCASE_HOME}
+fi
+
+CAMERA_V4L2_PRI=${CATS_TEST_HOME}"Camera_V4L2_PRI/"
+CAMERA_V4L2_ISP=${CATS_TEST_HOME}"Camera_V4L2_ISP/"
+CAMERA_V4L2_TPG=${CATS_TEST_HOME}"Camera_V4L2_TPG/"
+
+echo "===========================Running the script============================="
+get_dev_name(){
+    #$1: shell_casename
+    
+    for dev_p in ${dev_prefix[@]}
+    do
+        if [ $dev_p == "IMX214" ]; then
+            lower_h=`echo ${1##*214_} | sed -e 's/_/ /g'`         
+        elif [ $dev_p == "IMX132" ]; then
+            lower_h=`echo ${1##*132_} | sed -e 's/_/ /g'`
+        elif [ $dev_p == "CSI" ]; then
+            lower_h=`echo ${1##*CSI_} | sed -e 's/_/ /g'`
+        fi
+        echo $dev_p" "$lower_h
+    done
+}
+
+get_case_category(){
+    #$1:c_casename
+    if echo $1 | grep "S_SELECTION"; then
+        echo "V4L2_SubDev_SSel."
+    elif echo $1 | grep "S_FMT" | grep "Raw"; then
+        echo "V4L2_SubDev_SFmt."
+    elif echo $1 | grep "IOCTL"; then
+        echo "MC_Stdioctl_Test."
+    else
+        echo "V4L2_SubDev."
+    fi
+}
+
+get_subdev_c_casename(){
+    #$1:shell_casename
+    #$2:PIXEL
+    #if [ ! -z $2 -a -n `echo $2 | grep -o "[0-9]\{4\}x[0-9]\{4\}"`];then
+    if [ ! -z $2 -a -n `echo $2 | grep -o "[0-9]\{4\}x[0-9]\{4\}"` >/dev/null 2>&1 ]; then
+        echo ${1%%_${2}*}
+    else
+        for i in ${dev_prefix[@]}
+        do
+            if echo ${1} | grep $i; then
+                echo ${1%%_${i}*}
+            fi
+        done
+    fi
+}
+
+generate_cmd(){
+    #$1: shell casename for geting DEV_NAME for media ctl -e using "media-ctl -e "Intel IPU4 ${DEV_NAME} capture"
+    
+    s_casename=$1
+    PIXEL=`echo ${1} | grep -o "[0-9]\{4\}x[0-9]\{4\}"`
+
+    # SUBDEV: without IOCTL
+    if [ ! -z `echo ${1}` | grep 'IOCTL'];then
+        if [ ! -z "$PIXEL" ]; then
+            width=`echo $PIXEL | awk -F"x"'{print $1}'`
+            height=`echo $PIXEL | awk -F"x"'{print $2}'`
+            dev_name_o=$(get_dev_name $1)
+            c_casename=$(get_subdev_c_casename $1 $PIXEL)
+            c_casename_category=$(get_case_category $c_casename)
+            echo `dev_name=\$(media-ctl -e \"${dev_name_o}\");`
+            echo $EXE_NAME  --gtest_filter=\"${c_casename_category}.${c_case_name}\" -d=${dev_name} -w=${width} -h=${height}
+        else
+            dev_name_o=$(get_dev_name $1)
+            c_casename=$(get_subdev_c_casename $1)    
+            c_casename_category=$(get_case_category $c_casename)
+            echo `dev_name=\$(media-ctl -e \"${dev_name_o}\");`
+            echo $EXE_NAME  --gtest_filter=\"${c_casename_category}.${c_case_name}\" -d=${dev_name}
+        fi
+    else  # v4l2: none-subdev, no dev_name, no pixel
+        c_casename_category=$(get_case_category "IOCTL")
+        echo $EXE_NAME  --gtest_filter=\"${c_casename_category}.${1}\"
+    fi
+    
+}
+
+while read line
+do
+    # Get the TC corresponding component
+    if [ ! -z `echo $line | grep "CI_PRI_"` ]; then
+        FILE_DIR=${CAMERA_V4L2_PRI}
+    elif [ ! -z `echo $line | grep "CI_ISP_"` ]; then
+        FILE_DIR=${CAMERA_V4L2_ISP}
+    elif [ ! -z `echo $line | grep "CI_TPG_"` ]; then
+        FILE_DIR=${CAMERA_V4L2_TPG}
+    else
+        if [ ! -z `echo $line | grep "CI_" | grep "_IPU4_"` ]; then
+            echo "$0: ERROR - please check carefully if add new component"
+            echo $line
+            FILE_DIR=""
+        fi
+    fi
+
+    case_name=`echo ${line} | tr -d " "`
+    cmdline=generate_cmd $case_name 
+    # Get the TC corresponding config file 
+#    if [ ! -z `echo $line | grep "Raw10"` ]; then
+#        CONFIG_FILE="ov13860_be_config.sh"
+#        HAVE_CONFIG="YES"
+#    elif [ ! -z `echo $line | grep "Raw8"` ]; then
+#        CONFIG_FILE="imx214_be_config.sh"
+#        HAVE_CONFIG="YES"
+#    elif [ ! -z `echo $line | grep "YUV422"` ]; then
+#        #CONFIG_FILE="adv8741_mipi_config.sh"
+#        # use below config file name after 10/08/2015
+#        CONFIG_FILE="adv7481_mipi_config.sh"
+#        HAVE_CONFIG="YES"
+#    else
+#        echo "$0: ERROR - please check carefully if need add config file"
+#        echo $line
+#        CONFIG_FILE=""
+#        HAVE_CONFIG=""
+#    fi
+
+    # Select the right script according to case name
+#    have_frame=`echo ${line#*_Frame_} | awk -F_ '{if ($1 ~ /[0-9]+/) print $1}'`
+#    have_fps=`echo ${line#*_Frame_} | grep FPS`
+    if [ "$1" == "yocto" ]; then
+        if [ ! -z "${have_frame}" -a -z "${have_fps}" ]; then
+            SCRIPT=yocto_ipu4_script_frame
+        else
+            SCRIPT=yocto_ipu4_script
+        fi
+    else
+        if [ ! -z "${have_frame}" -a -z "${have_fps}" ]; then
+            SCRIPT=andriod_ipu4_script_frame
+        else
+            SCRIPT=andriod_ipu4_script
+        fi
+    fi
+
+    if [ $FILE_DIR ]; then
+        #if [ ! -d ${FILE_DIR}${case_name} ]; then
+            mkdir -p ${FILE_DIR}${case_name}
+            generated_file=${GENERATOR_SCRIPT_HOME}${case_name}/${case_name}
+            config_file=${GENERATOR_SCRIPT_HOME}${case_name}/${CONFIG_FILE}
+            if [ -f ${generated_file} ]; then
+                cd ${FILE_DIR}${case_name}
+                if [ ! -z "${HAVE_CONFIG}" ]; then
+                    cp ${config_file} ./
+                fi
+          #      cmdline=`cat ${generated_file}`
+                cmdline=$(generate_cmd $line) 
+                cp ${TOOL_PATH}/${SCRIPT} ./
+                sed -i '/Run test case/a\'"${cmdline#\.\/}" ${SCRIPT}
+                mv ${SCRIPT} ${case_name}
+                if [ $? -eq 0 ]; then
+                    sed -i '/'''${case_name}'''/d' ${TOOL_PATH}"/ipu4_bin_test_list"
+                fi
+            else
+                echo "---------------------Generated script file not exist list--------------------" >> ${TOOL_PATH}"/porting.log"
+                echo "${case_name}" >> ${TOOL_PATH}"/porting.log"
+                echo "---------------------Generated script file not exist list end-----------------" >> ${TOOL_PATH}"/porting.log"
+            fi
+       # else
+
+        #fi
+    fi
+done < ./ipu4_bin_test_list
+
+echo "======================Please confirm if all TC is added====================="
+cat ${TOOL_PATH}"/ipu4_bin_test_list"
+echo "==================================Script done==============================="

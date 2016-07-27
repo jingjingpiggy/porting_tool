@@ -1,0 +1,113 @@
+#!/bin/bash
+
+EXE_NAME="xos_libiacss_tests"
+#XOS_TEST_HOME_pre="$HOME/workspace/vied-viedandr-cats-dev/DUT"
+XOS_TEST_HOME_pre="$HOME/DUT"
+#XOS_TEST_HOME_suf="TestCase/Camera_XOS_PRI/"
+XOS_TEST_HOME_suf="Camera_XOS_PRI/"
+Case_category_pre="IaCipfTest"
+
+if [ "$1" == "yocto" ]; then
+    CATS_HOME=$XOS_TEST_HOME_pre"/Yocto/"$XOS_TEST_HOME_suf
+else
+    CATS_HOME=$XOS_TEST_HOME_pre"/Android/"$XOS_TEST_HOME_suf
+fi
+
+get_case_category(){
+    #$1: s_casename
+    s_casename=$1
+
+    if echo $s_casename | grep "Negative_Pipe" > /dev/null 2>&1; then
+        echo $Case_category_pre"_Pipe."
+    elif echo $s_casename | grep "Negative_Property" > /dev/null 2>&1; then
+        echo $Case_category_pre"."
+    elif echo $s_casename | grep "Negative_Buffer" > /dev/null 2>&1; then
+        echo $Case_category_pre"_Buffer."
+    elif echo $s_casename | grep "Negative_Registry" > /dev/null 2>&1; then
+        echo $Case_category_pre"_Registry."
+    fi
+}
+
+generate_cmd(){
+    #$1: shell casename which defined in c case
+    s_casename=$1
+    
+    case_category=$(get_case_category $1)
+    echo $EXE_NAME --gtest_filter=\"${case_category}\$CASE_NAME\" --gtest_color=no
+}
+
+write_shell_case(){
+    g_file=$1
+
+    if echo $g_file | grep "Android";then
+        cat > $g_file <<EOF
+#!/system/bin/sh
+
+CASE_NAME=\`basename \$0\`
+RESULT="PASS"
+DESCRIPTION=""
+
+# Run test case.
+
+if [ \$? -ne 0 ]; then
+    RESULT="FAIL"
+    DESCRIPTION="Error when run \${CASE_NAME}."
+fi
+
+echo "Test Case: \$CASE_NAME"
+echo "Result: \$RESULT"
+echo "Description: \$DESCRIPTION"
+EOF
+    else
+        cat > $g_file <<EOF
+#!/bin/bash
+
+CASE_NAME=\`basename \$0\`
+RESULT="PASS"
+DESCRIPTION=""
+
+# Run test case.
+
+if [ \$? -ne 0 ]; then
+    RESULT="FAIL"
+    DESCRIPTION="Error when run \${CASE_NAME}."
+fi
+
+echo "Test Case: \$CASE_NAME"
+echo "Result: \$RESULT"
+echo "Description: \$DESCRIPTION"
+EOF
+    fi
+}
+
+while read line
+do
+    case_name=`echo ${line} | sed -e "s/^[ ]*//g" | sed -e "s/[ ]*$//g"`
+    echo "====================$case_name==================="
+    cmdline=$(generate_cmd $case_name)
+    case_file_dir=${CATS_HOME}${case_name}
+    generated_file=$case_file_dir/$case_name
+
+    if [ -n "$case_file_dir" ]; then
+        if [ ! -d $case_file_dir ]; then
+            mkdir -p $case_file_dir && cd $_
+            touch $generated_file
+            write_shell_case $generated_file
+            if [[ $? -eq 0 ]]; then
+                echo "write $case_name successfully"
+            else
+                echo "write $case_name fail"
+            fi
+            sed -i '/Run test case/a\'"${cmdline#\.\/}"'' $generated_file
+        else
+            echo "$case_name file already exist" 
+            write_shell_case $generated_file
+            sed -i '/Run test case/a\'"${cmdline#\.\/}"'' $generated_file
+        fi
+        chmod a+x $generated_file
+        echo "--------------------Generated case-----------------"
+        echo $case_name
+        echo $cmdline
+    fi
+    
+done < ./test_list
